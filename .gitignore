@@ -1,0 +1,6 @@
+bin
+.vscode
+
+credentials.json
+.env
+*.txt
