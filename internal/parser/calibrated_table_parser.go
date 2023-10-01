@@ -136,6 +136,7 @@ func PlusOneEventsSetup(events []*entities.Event) error {
 		logrus.Errorf("Не получилось unmarshall события +1: %s.", err)
 		return errors.New("Видимо, формат данных в файле c событиями +1 неверный.")
 	}
+	slices.Sort(poe)
 
 	for _, event := range events {
 		if _, find := slices.BinarySearch(poe, event.Name); !find {
