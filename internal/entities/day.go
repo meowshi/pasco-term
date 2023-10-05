@@ -13,9 +13,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fatih/color"
 	"github.com/meowshi/pasco/internal/env"
 	"github.com/meowshi/pasco/internal/utils"
 	"github.com/rickb777/date"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/exp/slices"
 	"google.golang.org/api/sheets/v4"
 )
@@ -41,7 +43,6 @@ type LockerEvent struct {
 func (d *Day) BindLockers() error {
 	req, err := http.NewRequest("GET", env.LockerApi+"/events/events/", nil)
 	if err != nil {
-		fmt.Printf("Что-то пошло не так при связывании локеров: %s\n", err)
 		return err
 	}
 
@@ -52,20 +53,17 @@ func (d *Day) BindLockers() error {
 
 	res, err := d.Client.Do(req)
 	if err != nil {
-		fmt.Printf("Что-то пошло не так при связывании локеров: %s\n", err)
 		return err
 	}
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		fmt.Printf("Что-то пошло не так при связывании локеров: %s\n", err)
 		return err
 	}
 
 	lockerEvents := make([]LockerEvent, 0)
 	err = json.Unmarshal(body, &lockerEvents)
 	if err != nil {
-		fmt.Printf("Что-то пошло не так при связывании локеров: %s\n", err)
 		return err
 	}
 
@@ -111,9 +109,13 @@ func (d *Day) BindLockers() error {
 }
 
 func (d *Day) Start() {
-	d.BindLockers()
+	err := d.BindLockers()
+	if err != nil {
+		color.Red("Что-то пошло не так при связывании локеров.")
+		logrus.Errorf("Ошибка при связывании локеров: %s", err)
+	}
 
-	fmt.Println("\nГотовы встречать сотрудников!")
+	color.Green("\nГотовы встречать сотрудников!")
 
 	for {
 		fmt.Printf("Когда сюда после пика попадет id сотрудника, нажми Enter: ")
@@ -122,16 +124,17 @@ func (d *Day) Start() {
 		fmt.Scan(&id)
 		key := utils.RfidToKey(id)
 
-		login, finded := d.GetYandexoidLogin(key)
-		if !finded {
-			fmt.Printf("%s\n\n", "Яндексоид не найден")
+		login, err := d.GetYandexoidLogin(key)
+		if err != nil {
+			color.Red("Яндексоид не найден\n")
+			logrus.Errorf("Ошибка при получении логина яндексоида: %s.", err)
 			continue
 		}
-		fmt.Printf("Ого! К нам пришел: %s\n", login)
+		color.Green("Ого! К нам пришел: %s\n", login)
 
-		err := d.CheckYandexoid(login)
+		err = d.CheckYandexoid(login)
 		if err != nil {
-			fmt.Println(err)
+			color.Red(err.Error())
 			fmt.Println("Будем давать подарки? (y/n): ")
 			input := utils.Readln()
 			switch input {
@@ -147,20 +150,19 @@ func (d *Day) Start() {
 
 		err = d.GiveGift(login, key)
 		if err != nil {
-			fmt.Printf("Когда отдавали подарок, что-то случилось: %s\n\n", err)
+			color.Red("Когда отдавали подарок, что-то случилось: %s\n\n", err)
 			continue
 		}
-		fmt.Println("Подарок улетел!")
+		color.Green("Подарок улетел!")
 
 		fmt.Println()
 	}
 }
-func (d *Day) PrintBraclet(event *Event, count int) {
+func (d *Day) PrintBraclet(event *Event, count int) error {
 	json := fmt.Sprintf("{\"event_id\": \"%s\", \"printer_id\": \"%s\", \"print_count\": %d}", event.LockerEventId, d.PrinterId, count)
 	req, err := http.NewRequest("POST", env.LockerApi+"/bracelets/create/", bytes.NewReader([]byte(json)))
 	if err != nil {
-		fmt.Println(err)
-		return
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	req.Header.Set("Authorization", env.LockerToken)
@@ -172,20 +174,19 @@ func (d *Day) PrintBraclet(event *Event, count int) {
 				json := fmt.Sprintf("{\"event_id\": \"%s\", \"printer_id\": \"%s\", \"print_count\": %d}", event.LockerEventId, PrinterPool[i], count)
 				req, err := http.NewRequest("POST", env.LockerApi+"/bracelets/create/", bytes.NewReader([]byte(json)))
 				if err != nil {
-					fmt.Println(err)
-					return
+					return err
 				}
 				req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 				req.Header.Set("Authorization", env.LockerToken)
 
 				res, err = d.Client.Do(req)
 				if err != nil && res.StatusCode != 200 {
-					fmt.Println("Не получилось распечатать")
-					return
+					return err
 				}
 			}
 		}
 	}
+	return nil
 }
 
 func (d *Day) GiveGift(login, key string) error {
@@ -212,9 +213,10 @@ func (d *Day) GiveGift(login, key string) error {
 	return nil
 }
 
-func (d *Day) GetYandexoidLogin(key string) (string, bool) {
+func (d *Day) GetYandexoidLogin(key string) (string, error) {
 	req, err := http.NewRequest("GET", env.GiftAuth, nil)
 	if err != nil {
+		return "", err
 	}
 
 	q := req.URL.Query()
@@ -223,11 +225,11 @@ func (d *Day) GetYandexoidLogin(key string) (string, bool) {
 
 	res, err := d.Client.Do(req)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	if res.StatusCode == 400 {
-		return "", false
+		return "", errors.New("HTTP response status - 400")
 	}
 
 	body, err := io.ReadAll(res.Body)
@@ -238,10 +240,10 @@ func (d *Day) GetYandexoidLogin(key string) (string, bool) {
 	var giftRes GiftRes
 	err = json.Unmarshal(body, &giftRes)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
-	return giftRes.LuckyLogin, true
+	return giftRes.LuckyLogin, nil
 }
 
 type GiftRes struct {
@@ -286,7 +288,7 @@ loop:
 			peopleCount = 2
 			break loop
 		default:
-			fmt.Println("Да или нет? y/<ENTER> или n?")
+			color.Red("Да или нет? y/<ENTER> или n?")
 		}
 	}
 	return peopleCount
@@ -318,10 +320,10 @@ func (d *Day) CheckYandexoid(login string) error {
 		return errors.New("Яндексоид никуда не записан")
 	case 1:
 		event = entries[0]
-		fmt.Printf("Яндексоид записан на %s.\n", event.Name)
+		color.Green("Яндексоид записан на %s.\n", event.Name)
 		break
 	default:
-		fmt.Println("Яндексоид записан на несколько мероприятий.")
+		color.Green("Яндексоид записан на несколько мероприятий.")
 		for i, e := range entries {
 			fmt.Printf("%d. %s\n", i+1, e.Name)
 		}
@@ -332,7 +334,7 @@ func (d *Day) CheckYandexoid(login string) error {
 			fmt.Scanf("%d", &choice)
 
 			if choice > len(entries) || choice <= 0 {
-				fmt.Printf("Что-то ты напутал. Попробуй снова: ")
+				color.New(color.FgRed).Print("Что-то ты напутал. Попробуй снова: ")
 				continue
 			}
 
@@ -347,7 +349,11 @@ func (d *Day) CheckYandexoid(login string) error {
 		peopleCount = d.AskPeopleCount()
 	}
 
-	d.PrintBraclet(event, peopleCount)
+	err := d.PrintBraclet(event, peopleCount)
+	if err != nil {
+		logrus.Errorf("Ошибка при печати браслета: %s.", err)
+		return errors.New("Не удалось распечатать браслет.")
+	}
 
 	return d.UpdateYandexoidStatus(event, login, peopleCount)
 }
