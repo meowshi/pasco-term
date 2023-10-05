@@ -234,7 +234,7 @@ func (d *Day) GetYandexoidLogin(key string) (string, error) {
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	var giftRes GiftRes
